@@ -300,3 +300,111 @@ def add_problems_to_today(
         "skipped_existing": skipped_existing,
         "skipped_invalid": skipped_invalid,
     }
+
+
+def remove_problems_from_today(
+    session: Session,
+    *,
+    problem_ids: list[str] | None = None,
+    plan_item_ids: list[int] | None = None,
+    on: date | None = None,
+    user_id: str = "local",
+) -> dict:
+    """Withdraw *bank-added* problems from today's pending queue.
+
+    Only ``item_type == "custom"`` items can be withdrawn. Roadmap items
+    (main / review / weak) are never deleted or rescheduled here — they
+    stay on the learning path and remain on today's task list.
+    """
+    on = on or date.today()
+    plan = get_active_plan(session, user_id)
+    if plan is None:
+        raise RuntimeError("no active plan")
+
+    problem_ids = problem_ids or []
+    plan_item_ids = plan_item_ids or []
+
+    candidates: list[PlanItem] = []
+    if plan_item_ids:
+        for pid in plan_item_ids:
+            item = session.get(PlanItem, pid)
+            if item is not None and item.plan_id == plan.id:
+                candidates.append(item)
+
+    if problem_ids:
+        rows = session.exec(
+            select(PlanItem).where(
+                PlanItem.plan_id == plan.id,
+                PlanItem.problem_id.in_(problem_ids),  # type: ignore[attr-defined]
+                PlanItem.scheduled_date == on,
+                PlanItem.status == "pending",
+            )
+        ).all()
+        for row in rows:
+            if all(row.id != c.id for c in candidates):
+                candidates.append(row)
+
+    removed = 0
+    skipped = 0
+    skipped_roadmap = 0
+    for item in candidates:
+        if item.status != "pending" or item.scheduled_date != on:
+            skipped += 1
+            continue
+        # Only user-picked bank adds may be withdrawn from today.
+        if item.item_type != "custom":
+            skipped_roadmap += 1
+            skipped += 1
+            continue
+        session.delete(item)
+        removed += 1
+
+    session.commit()
+    return {
+        "removed": removed,
+        "skipped": skipped,
+        "skipped_roadmap": skipped_roadmap,
+    }
+
+
+def repair_withdrawn_roadmap_items(
+    session: Session,
+    *,
+    user_id: str = "local",
+    on: date | None = None,
+) -> int:
+    """Undo accidental roadmap reschedules from the old withdraw behavior.
+
+    Restores main/review/weak items that were pushed to tomorrow with the
+    ``已从今日撤回选择`` marker back onto ``on`` (default: today).
+    """
+    on = on or date.today()
+    plan = get_active_plan(session, user_id)
+    if plan is None:
+        return 0
+    marker = "已从今日撤回选择"
+    rows = session.exec(
+        select(PlanItem).where(
+            PlanItem.plan_id == plan.id,
+            PlanItem.status == "pending",
+            PlanItem.item_type != "custom",
+        )
+    ).all()
+    fixed = 0
+    for item in rows:
+        reason = item.reason or ""
+        if marker not in reason:
+            continue
+        item.reason = (
+            reason.replace(" · " + marker, "")
+            .replace(marker, "")
+            .strip(" ·")
+        )
+        # Only pull back one day if it was deferred by the old withdraw path.
+        if item.scheduled_date == on + timedelta(days=1):
+            item.scheduled_date = on
+        session.add(item)
+        fixed += 1
+    if fixed:
+        session.commit()
+    return fixed

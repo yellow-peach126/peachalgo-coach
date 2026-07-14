@@ -31,6 +31,8 @@ from app.models import Attempt, PlanItem, UserProfile
 from app.schemas import (
     AddTodayRequest,
     AddTodayResponse,
+    RemoveTodayRequest,
+    RemoveTodayResponse,
     AttemptCreate,
     AttemptOut,
     CheckinOut,
@@ -51,7 +53,13 @@ from app.schemas import (
 )
 from app.services.adapter import record_attempt, skip_plan_item, undo_attempt
 from app.services.checkin import get_checkins
-from app.services.planner import add_problems_to_today, create_plan_from_onboarding, get_active_plan
+from app.services.planner import (
+    add_problems_to_today,
+    create_plan_from_onboarding,
+    get_active_plan,
+    remove_problems_from_today,
+    repair_withdrawn_roadmap_items,
+)
 from app.services.review import list_due_reviews
 from app.services.stats import get_stats
 
@@ -461,6 +469,44 @@ def add_today(
     )
 
 
+@router.post("/today/remove", response_model=RemoveTodayResponse)
+def remove_today(
+    payload: RemoveTodayRequest,
+    session: Session = Depends(get_session),
+) -> RemoveTodayResponse:
+    profile = session.get(UserProfile, "local")
+    if profile is None or not profile.onboarded:
+        raise HTTPException(status_code=400, detail="请先完成入门设置")
+    if not payload.problem_ids and not payload.plan_item_ids:
+        raise HTTPException(status_code=400, detail="请指定要撤回的题目")
+    try:
+        result = remove_problems_from_today(
+            session,
+            problem_ids=payload.problem_ids,
+            plan_item_ids=payload.plan_item_ids,
+            on=payload.date,
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=400, detail="当前没有有效计划，请重新设置") from None
+    removed = int(result["removed"])
+    skipped = int(result["skipped"])
+    skipped_roadmap = int(result.get("skipped_roadmap") or 0)
+    if removed == 0 and skipped_roadmap:
+        message = (
+            "这些题来自学习路线，不能在题库里撤回。"
+            "路线题会保留在今日任务与学习路线中；只有你从题库自行添加的题可以撤回。"
+        )
+    elif removed == 0:
+        message = "没有可撤回的今日自选题（可能已完成、不在今日，或属于学习路线）。"
+    else:
+        message = f"已从今日撤回 {removed} 道自选题。"
+        if skipped_roadmap:
+            message += f" 另有 {skipped_roadmap} 道路线题已跳过（未改动学习路线）。"
+        elif skipped:
+            message += f" 跳过 {skipped} 项。"
+    return RemoveTodayResponse(removed=removed, skipped=skipped, message=message)
+
+
 @router.get("/plan", response_model=PlanOut)
 def get_plan(session: Session = Depends(get_session)) -> PlanOut:
     plan = get_active_plan(session)
@@ -540,14 +586,40 @@ def problems(
     for a in attempts:
         if a.problem_id not in latest:
             latest[a.problem_id] = a
+
+    # Repair accidental roadmap reschedules from older withdraw logic (once per request is cheap).
+    repair_withdrawn_roadmap_items(session)
+
+    # Pending items scheduled for today → show as "已加入今日" in bank.
+    # Prefer custom (user-picked) over roadmap when both exist for same problem.
+    today_pending: dict[str, PlanItem] = {}
+    plan = get_active_plan(session)
+    if plan is not None:
+        pending_today = session.exec(
+            select(PlanItem).where(
+                PlanItem.plan_id == plan.id,
+                PlanItem.scheduled_date == date.today(),
+                PlanItem.status == "pending",
+            )
+        ).all()
+        for item in pending_today:
+            prev = today_pending.get(item.problem_id)
+            if prev is None or (prev.item_type != "custom" and item.item_type == "custom"):
+                today_pending[item.problem_id] = item
+
     for p in items:
         a = latest.get(p.id)
-        if a is None:
-            continue
-        p.completed = True
-        p.completed_result = a.result
-        p.completed_result_zh = RESULT_ZH.get(a.result, a.result)
-        p.completed_at = a.created_at
+        if a is not None:
+            p.completed = True
+            p.completed_result = a.result
+            p.completed_result_zh = RESULT_ZH.get(a.result, a.result)
+            p.completed_at = a.created_at
+        today_item = today_pending.get(p.id)
+        if today_item is not None and not p.completed:
+            p.in_today = True
+            p.today_plan_item_id = today_item.id
+            p.today_item_type = today_item.item_type
+            p.can_withdraw_today = today_item.item_type == "custom"
     return items
 
 

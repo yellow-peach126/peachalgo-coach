@@ -58,6 +58,12 @@ class ProblemOut(BaseModel):
     completed_result: Optional[str] = None
     completed_result_zh: str = ""
     completed_at: Optional[datetime] = None
+    # Pending on today's queue (added from bank or planned for today).
+    in_today: bool = False
+    today_plan_item_id: Optional[int] = None
+    # main | review | weak | custom — only custom may be withdrawn from bank.
+    today_item_type: Optional[str] = None
+    can_withdraw_today: bool = False
 
 
 class TodayItemOut(BaseModel):
@@ -165,6 +171,18 @@ class AddTodayResponse(BaseModel):
     added: int = 0
     skipped_existing: int = 0
     skipped_invalid: int = 0
+    message: str = ""
+
+
+class RemoveTodayRequest(BaseModel):
+    problem_ids: list[str] = Field(default_factory=list)
+    plan_item_ids: list[int] = Field(default_factory=list)
+    date: Optional[date] = None
+
+
+class RemoveTodayResponse(BaseModel):
+    removed: int = 0
+    skipped: int = 0
     message: str = ""
 
 

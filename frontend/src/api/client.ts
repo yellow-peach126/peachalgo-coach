@@ -39,6 +39,12 @@ export interface Problem {
   completed_result?: string | null;
   completed_result_zh?: string;
   completed_at?: string | null;
+  in_today?: boolean;
+  today_plan_item_id?: number | null;
+  /** main | review | weak | custom */
+  today_item_type?: string | null;
+  /** Only bank-added custom items can be withdrawn from the catalog. */
+  can_withdraw_today?: boolean;
 }
 
 export interface TodayItem {
@@ -289,6 +295,11 @@ export const api = {
     }>("/api/today/add", {
       method: "POST",
       body: JSON.stringify({ problem_ids }),
+    }),
+  removeToday: (payload: { problem_ids?: string[]; plan_item_ids?: number[] }) =>
+    request<{ removed: number; skipped: number; message: string }>("/api/today/remove", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   plan: () => request<Plan>("/api/plan"),
   stats: () => request<Stats>("/api/stats"),

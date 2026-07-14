@@ -14,6 +14,17 @@ from app.db import init_db
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    # Heal roadmap items accidentally deferred by older withdraw logic.
+    try:
+        from sqlmodel import Session
+
+        from app.db import engine
+        from app.services.planner import repair_withdrawn_roadmap_items
+
+        with Session(engine) as session:
+            repair_withdrawn_roadmap_items(session)
+    except Exception:
+        pass
     yield
 
 
