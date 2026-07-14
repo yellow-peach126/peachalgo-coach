@@ -38,7 +38,7 @@
 **需要：** [Docker Desktop](https://www.docker.com/products/docker-desktop/) 或 Docker Engine + Compose
 
 ```bash
-git clone https://github.com/<你的用户名>/peachalgo-coach.git
+git clone https://github.com/yellow-peach126/peachalgo-coach.git
 cd peachalgo-coach
 docker compose up --build
 ```
@@ -58,6 +58,32 @@ docker compose down
 ```
 
 学习数据保存在 Docker volume `coach-data` 中。
+
+## 安全与隐私（请先读）
+
+本项目是 **本地优先、单用户、无登录** 工具，不是面向公网的多租户服务。
+
+| 场景 | 建议 |
+|------|------|
+| 本机 Docker / 本机开发 / Windows 桌面版 | ✅ 推荐 |
+| 仅自己可访问的私有网络 | ✅ 可以 |
+| 把 `8000` / `5173` 端口直接暴露到公网 | ❌ 不推荐 |
+
+原因简述：
+
+- API **没有账号鉴权**（`/api/export`、`/api/import`、`/api/reset` 等在本地自用是合理的）
+- 一旦端口对公网开放，他人可能读取、覆盖或清空学习数据
+- CORS 为方便本地前端，也按「本机使用」设计
+
+**请只在本机或可信网络部署。** 若必须放到公网，请自行加反向代理鉴权 / VPN / 防火墙白名单，不要裸奔端口。
+
+学习数据默认只存在：
+
+- 开发模式：`backend/data/coach.db`
+- Docker：volume `coach-data`
+- Windows EXE：`%LOCALAPPDATA%\PeachAlgoCoach\`
+
+仓库与镜像 **不包含** 你的个人刷题记录；也 **不包含** 任何第三方 API Key。
 
 ---
 
@@ -198,4 +224,4 @@ MIT — 见 [LICENSE](LICENSE)
 
 ---
 
-**声明：** 本项目与 LeetCode / 力扣官方无关。题库仅使用公开可访问的元数据与题目链接，不提供题面转载或自动提交。
+**声明：** 本项目与 LeetCode / 力扣官方无关。题库仅使用公开可访问的元数据与题目链接，不提供题面转载或自动提交。仅建议在本机或私有网络自托管，勿将未加固的服务端口直接暴露到公网。
